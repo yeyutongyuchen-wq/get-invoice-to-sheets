@@ -1,9 +1,371 @@
-<!DOCTYPE html>  "<!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <title>Hello World</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GetInvoiceToSheets – Invoice to CSV</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .drag-active { border-color: #10b981 !important; background-color: #ecfdf5; }
+    .error-field { background-color: #fef2f2 !important; border-color: #ef4444 !important; }
+  </style>
 </head>
-<body>
-  <h1>Hello World</h1>
+<body class="bg-gray-50 min-h-screen text-gray-800">
+
+  <header class="bg-white border-b border-gray-200">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white font-bold">G</div>
+        <h1 class="text-xl font-semibold">GetInvoiceToSheets</h1>
+      </div>
+      <div id="status-badge" class="text-sm text-gray-500">Free Preview Mode</div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-8">
+
+    <div id="drop-zone"
+         class="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-white mb-8 transition-all cursor-pointer hover:border-emerald-400">
+      <div class="text-5xl mb-4">📄</div>
+      <p class="text-lg font-medium mb-2">Drag & drop invoice image here</p>
+      <p class="text-sm text-gray-500 mb-4">or click to select (JPG / PNG)</p>
+      <input type="file" id="file-input" accept="image/jpeg,image/png" class="hidden" />
+      <button onclick="document.getElementById('file-input').click()"
+              class="px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition">
+        Select File
+      </button>
+    </div>
+
+    <div id="loading" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl px-8 py-6 shadow-xl text-center">
+        <div class="animate-spin w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+        <p class="font-medium">AI is extracting data...</p>
+      </div>
+    </div>
+
+    <div id="main-content" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <div class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <h2 class="text-sm font-medium text-gray-500 mb-3">Invoice Preview</h2>
+        <img id="preview-img" class="w-full rounded-lg border border-gray-100" alt="Invoice preview" />
+      </div>
+
+      <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold">Data Review</h2>
+          <button id="add-row-btn" class="text-sm px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100">
+            + Add Row
+          </button>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3 mb-5">
+          <div>
+            <label class="text-xs text-gray-500">Date</label>
+            <input id="invoice-date" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Supplier</label>
+            <input id="supplier" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Invoice Total</label>
+            <input id="invoice-total" type="number" step="0.01" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-gray-500 border-b">
+                <th class="pb-2 font-medium">Description</th>
+                <th class="pb-2 font-medium w-24">Unit Price</th>
+                <th class="pb-2 font-medium w-20">Qty</th>
+                <th class="pb-2 font-medium w-24">Line Total</th>
+                <th class="pb-2 w-8"></th>
+              </tr>
+            </thead>
+            <tbody id="line-items-body"></tbody>
+          </table>
+        </div>
+
+        <div id="validation-status" class="mt-5 p-3 rounded-lg text-sm flex items-center gap-2">
+          <span id="status-icon">✅</span>
+          <span id="status-text">All checks passed</span>
+        </div>
+
+        <div class="mt-6 pt-5 border-t border-gray-100">
+          <div id="payment-wall" class="bg-gray-50 rounded-xl p-5 border border-gray-200">
+            <h3 class="font-semibold text-gray-800 mb-1">Unlock Full Download</h3>
+            <p class="text-sm text-gray-600 mb-4">
+              Pay <span class="font-bold text-emerald-600">$1.99</span> to download the complete CSV file.
+              No registration required.
+            </p>
+            <div id="paypal-button-container"></div>
+            <p class="text-xs text-gray-400 mt-3 text-center">Secure payment powered by PayPal</p>
+          </div>
+
+          <button id="download-csv-btn"
+                  class="hidden w-full mt-4 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition flex items-center justify-center gap-2">
+            <span>Download CSV</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = 'https://get-invoice-to-sheets-production.up.railway.app';
+    let currentData = null;
+
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const loading = document.getElementById('loading');
+    const mainContent = document.getElementById('main-content');
+    const previewImg = document.getElementById('preview-img');
+    const lineItemsBody = document.getElementById('line-items-body');
+    const paymentWall = document.getElementById('payment-wall');
+    const downloadBtn = document.getElementById('download-csv-btn');
+    const statusBadge = document.getElementById('status-badge');
+
+    // 拖拽上传
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drag-active');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-active'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-active');
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length) handleFile(e.target.files[0]);
+    });
+
+    async function handleFile(file) {
+      if (!file.type.match(/image\/(jpeg|png)/)) {
+        alert('Please upload JPG or PNG image');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => previewImg.src = e.target.result;
+      reader.readAsDataURL(file);
+
+      loading.classList.remove('hidden');
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        currentData = data;
+        populateForm(data);
+        mainContent.classList.remove('hidden');
+        dropZone.classList.add('hidden');
+        runValidation();
+      } catch (err) {
+        alert('Recognition failed: ' + err.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    function populateForm(data) {
+      document.getElementById('invoice-date').value = data.invoice_date || '';
+      document.getElementById('supplier').value = data.vendor_name || '';
+      document.getElementById('invoice-total').value = data.invoice_total || '';
+
+      lineItemsBody.innerHTML = '';
+      (data.line_items || []).forEach(item => addRow(item));
+      if ((data.line_items || []).length === 0) addRow();
+    }
+
+    function addRow(item = {}) {
+      const tr = document.createElement('tr');
+      tr.className = 'line-row border-b border-gray-50';
+      tr.innerHTML = `
+        <td class="py-2 pr-2">
+          <input class="desc-input w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value="${item.description || ''}" />
+        </td>
+        <td class="py-2 pr-2">
+          <input type="number" step="0.01" class="price-input w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value="${item.unit_price || ''}" />
+        </td>
+        <td class="py-2 pr-2">
+          <input type="number" step="0.01" class="qty-input w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value="${item.quantity || ''}" />
+        </td>
+        <td class="py-2 pr-2">
+          <input type="number" step="0.01" class="line-total-input w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value="${item.amount || ''}" />
+        </td>
+        <td class="py-2">
+          <button class="text-red-400 hover:text-red-600 text-lg leading-none" onclick="this.closest('tr').remove(); runValidation();">×</button>
+        </td>
+      `;
+      lineItemsBody.appendChild(tr);
+      tr.querySelectorAll('input').forEach(input => input.addEventListener('input', runValidation));
+    }
+
+    document.getElementById('add-row-btn').addEventListener('click', () => addRow());
+
+    function runValidation() {
+      let hasError = false;
+      let lineSum = 0;
+      const rows = document.querySelectorAll('.line-row');
+
+      rows.forEach(row => {
+        const price = parseFloat(row.querySelector('.price-input').value) || 0;
+        const qty = parseFloat(row.querySelector('.qty-input').value) || 0;
+        const lineTotalInput = row.querySelector('.line-total-input');
+        const lineTotal = parseFloat(lineTotalInput.value) || 0;
+        const calculated = +(price * qty).toFixed(2);
+
+        if (Math.abs(calculated - lineTotal) > 0.01) {
+          lineTotalInput.classList.add('error-field');
+          hasError = true;
+        } else {
+          lineTotalInput.classList.remove('error-field');
+        }
+        lineSum += lineTotal;
+      });
+
+      const invoiceTotal = parseFloat(document.getElementById('invoice-total').value) || 0;
+      const totalInput = document.getElementById('invoice-total');
+      if (Math.abs(lineSum - invoiceTotal) > 0.01) {
+        totalInput.classList.add('error-field');
+        hasError = true;
+      } else {
+        totalInput.classList.remove('error-field');
+      }
+
+      const statusIcon = document.getElementById('status-icon');
+      const statusText = document.getElementById('status-text');
+      const statusBox = document.getElementById('validation-status');
+
+      if (hasError) {
+        statusIcon.textContent = '⚠️';
+        statusText.textContent = `Data mismatch detected (difference: ${Math.abs(lineSum - invoiceTotal).toFixed(2)})`;
+        statusBox.className = 'mt-5 p-3 rounded-lg text-sm flex items-center gap-2 bg-red-50 text-red-700';
+      } else {
+        statusIcon.textContent = '✅';
+        statusText.textContent = 'All checks passed – ready to download';
+        statusBox.className = 'mt-5 p-3 rounded-lg text-sm flex items-center gap-2 bg-emerald-50 text-emerald-700';
+      }
+    }
+
+    ['invoice-date', 'supplier', 'invoice-total'].forEach(id => {
+      document.getElementById(id).addEventListener('input', runValidation);
+    });
+
+    function downloadCSV() {
+      const date = document.getElementById('invoice-date').value || '';
+      const supplier = document.getElementById('supplier').value || '';
+      const invoiceTotal = document.getElementById('invoice-total').value || '0.00';
+
+      let csv = 'Date,Supplier,Description,Unit Price,Quantity,Line Total,Invoice Total\n';
+      const rows = document.querySelectorAll('.line-row');
+
+      if (rows.length === 0) {
+        csv += `"${date}","${supplier}",,,,,"${invoiceTotal}"\n`;
+      } else {
+        rows.forEach((row, idx) => {
+          const desc = row.querySelector('.desc-input').value || '';
+          const price = row.querySelector('.price-input').value || '0';
+          const qty = row.querySelector('.qty-input').value || '0';
+          const lineTotal = row.querySelector('.line-total-input').value || '0';
+          const invCol = idx === 0 ? `"${invoiceTotal}"` : '';
+          csv += `"${date}","${supplier}","${desc}","${price}","${qty}","${lineTotal}",${invCol}\n`;
+        });
+      }
+
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice_${date || 'export'}_${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    downloadBtn.addEventListener('click', downloadCSV);
+
+    function unlockDownload() {
+      paymentWall.classList.add('hidden');
+      downloadBtn.classList.remove('hidden');
+      statusBadge.textContent = 'Unlocked – Download Ready';
+      statusBadge.className = 'text-sm text-emerald-600 font-medium';
+    }
+
+    function checkExistingToken() {
+      const token = localStorage.getItem('download_token');
+      if (!token) return;
+
+      fetch(`${API_BASE}/api/verify-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.valid) unlockDownload();
+        else localStorage.removeItem('download_token');
+      })
+      .catch(() => localStorage.removeItem('download_token'));
+    }
+
+    // 跳转支付
+    async function startPayPalPayment() {
+      try {
+        const res = await fetch(`${API_BASE}/api/create-order`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (data.approve_url) {
+          window.location.href = data.approve_url;
+        } else {
+          alert('创建支付订单失败，请重试');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('支付请求失败');
+      }
+    }
+
+    // 渲染支付按钮
+    document.getElementById('paypal-button-container').innerHTML = `
+      <button onclick="startPayPalPayment()"
+              class="w-full py-3 bg-[#0070ba] hover:bg-[#005ea6] text-white font-medium rounded-lg transition">
+        使用 PayPal 支付 $1.99
+      </button>
+    `;
+
+    // 检查是否从 PayPal 返回
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    const payerId = urlParams.get('PayerID');
+
+    if (token && payerId) {
+      fetch(`${API_BASE}/api/capture-order/${token}`, { method: 'POST' })
+        .then(res => res.json())
+        .then(details => {
+          if (details.status === 'COMPLETED' && details.download_token) {
+            localStorage.setItem('download_token', details.download_token);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            alert('Payment successful! Download unlocked (valid for 30 minutes).');
+            unlockDownload();
+          } else {
+            alert('支付确认失败，请重试');
+          }
+        })
+        .catch(err => {
+          console.error(err);
+          alert('支付确认出错');
+        });
+    }
+
+    checkExistingToken();
+  </script>
 </body>
 </html>
