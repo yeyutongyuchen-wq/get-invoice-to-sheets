@@ -88,7 +88,7 @@ def upload():
 
     try:
         completion = client.beta.chat.completions.parse(
-            model="qwen/qwen2.5-vl-72b-instruct",
+            model="openai/gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
