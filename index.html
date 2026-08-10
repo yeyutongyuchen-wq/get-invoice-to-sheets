@@ -154,8 +154,10 @@
       if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
     });
     fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length) handleFile(e.target.files[0]);
-    });
+  console.log('文件已选择', e.target.files);
+  alert('文件已选择，准备上传');
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
 
     async function handleFile(file) {
       if (!file.type.match(/image\/(jpeg|png)/)) {
