@@ -127,7 +127,7 @@
     const downloadBtn = document.getElementById('download-csv-btn');
     const statusBadge = document.getElementById('status-badge');
 
-    // 拖拽上传
+    // ===================== 拖拽上传 =====================
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
       dropZone.classList.add('drag-active');
@@ -149,7 +149,11 @@
       }
 
       const reader = new FileReader();
-      reader.onload = (e) => previewImg.src = e.target.result;
+      reader.onload = (e) => {
+        previewImg.src = e.target.result;
+        // 同时保存预览图，支付回来后还能显示
+        localStorage.setItem('invoice_preview', e.target.result);
+      };
       reader.readAsDataURL(file);
 
       loading.classList.remove('hidden');
@@ -166,6 +170,9 @@
         mainContent.classList.remove('hidden');
         dropZone.classList.add('hidden');
         runValidation();
+
+        // 识别成功后立刻保存数据
+        saveFormToLocalStorage();
       } catch (err) {
         alert('Recognition failed: ' + err.message);
       } finally {
@@ -200,15 +207,70 @@
           <input type="number" step="0.01" class="line-total-input w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value="${item.amount || ''}" />
         </td>
         <td class="py-2">
-          <button class="text-red-400 hover:text-red-600 text-lg leading-none" onclick="this.closest('tr').remove(); runValidation();">×</button>
+          <button class="text-red-400 hover:text-red-600 text-lg leading-none" onclick="this.closest('tr').remove(); runValidation(); saveFormToLocalStorage();">×</button>
         </td>
       `;
       lineItemsBody.appendChild(tr);
-      tr.querySelectorAll('input').forEach(input => input.addEventListener('input', runValidation));
+
+      tr.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', () => {
+          runValidation();
+          saveFormToLocalStorage();
+        });
+      });
     }
 
-    document.getElementById('add-row-btn').addEventListener('click', () => addRow());
+    document.getElementById('add-row-btn').addEventListener('click', () => {
+      addRow();
+      saveFormToLocalStorage();
+    });
 
+    // ===================== 保存 / 恢复数据 =====================
+    function saveFormToLocalStorage() {
+      const data = {
+        invoice_date: document.getElementById('invoice-date').value,
+        vendor_name: document.getElementById('supplier').value,
+        invoice_total: document.getElementById('invoice-total').value,
+        line_items: []
+      };
+
+      document.querySelectorAll('.line-row').forEach(row => {
+        data.line_items.push({
+          description: row.querySelector('.desc-input').value,
+          unit_price: row.querySelector('.price-input').value,
+          quantity: row.querySelector('.qty-input').value,
+          amount: row.querySelector('.line-total-input').value
+        });
+      });
+
+      localStorage.setItem('invoice_form_data', JSON.stringify(data));
+    }
+
+    function restoreFormFromLocalStorage() {
+      const saved = localStorage.getItem('invoice_form_data');
+      const preview = localStorage.getItem('invoice_preview');
+
+      if (!saved) return false;
+
+      try {
+        const data = JSON.parse(saved);
+        populateForm(data);
+
+        if (preview) {
+          previewImg.src = preview;
+        }
+
+        mainContent.classList.remove('hidden');
+        dropZone.classList.add('hidden');
+        runValidation();
+        return true;
+      } catch (e) {
+        console.error('Restore failed', e);
+        return false;
+      }
+    }
+
+    // ===================== 校验 =====================
     function runValidation() {
       let hasError = false;
       let lineSum = 0;
@@ -255,9 +317,13 @@
     }
 
     ['invoice-date', 'supplier', 'invoice-total'].forEach(id => {
-      document.getElementById(id).addEventListener('input', runValidation);
+      document.getElementById(id).addEventListener('input', () => {
+        runValidation();
+        saveFormToLocalStorage();
+      });
     });
 
+    // ===================== 下载 CSV =====================
     function downloadCSV() {
       const date = document.getElementById('invoice-date').value || '';
       const supplier = document.getElementById('supplier').value || '';
@@ -290,6 +356,7 @@
 
     downloadBtn.addEventListener('click', downloadCSV);
 
+    // ===================== 解锁逻辑 =====================
     function unlockDownload() {
       paymentWall.classList.add('hidden');
       downloadBtn.classList.remove('hidden');
@@ -308,14 +375,22 @@
       })
       .then(r => r.json())
       .then(data => {
-        if (data.valid) unlockDownload();
-        else localStorage.removeItem('download_token');
+        if (data.valid) {
+          unlockDownload();
+          // 如果有保存的数据，也恢复出来
+          restoreFormFromLocalStorage();
+        } else {
+          localStorage.removeItem('download_token');
+        }
       })
       .catch(() => localStorage.removeItem('download_token'));
     }
 
-    // 跳转支付
+    // ===================== 支付 =====================
     async function startPayPalPayment() {
+      // 支付前先保存当前数据
+      saveFormToLocalStorage();
+
       try {
         const res = await fetch(`${API_BASE}/api/create-order`, {
           method: 'POST',
@@ -341,7 +416,7 @@
       </button>
     `;
 
-    // 检查是否从 PayPal 返回
+    // ===================== 支付返回处理 =====================
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
     const payerId = urlParams.get('PayerID');
@@ -353,8 +428,16 @@
           if (details.status === 'COMPLETED' && details.download_token) {
             localStorage.setItem('download_token', details.download_token);
             window.history.replaceState({}, document.title, window.location.pathname);
-            alert('Payment successful! Download unlocked (valid for 30 minutes).');
+
+            // 恢复数据 + 解锁
+            const restored = restoreFormFromLocalStorage();
             unlockDownload();
+
+            if (restored) {
+              alert('Payment successful! Data restored. You can now download the CSV.');
+            } else {
+              alert('Payment successful! Please upload the invoice again to download.');
+            }
           } else {
             alert('支付确认失败，请重试');
           }
@@ -363,9 +446,10 @@
           console.error(err);
           alert('支付确认出错');
         });
+    } else {
+      // 普通刷新时检查是否已解锁
+      checkExistingToken();
     }
-
-    checkExistingToken();
   </script>
 </body>
 </html>
