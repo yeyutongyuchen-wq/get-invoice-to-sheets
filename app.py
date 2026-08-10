@@ -21,9 +21,9 @@ PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID")
 PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET")
 PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com"  # 上线后改为 https://api-m.paypal.com
 
-CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
-CF_KV_NAMESPACE_ID = os.getenv("CF_KV_NAMESPACE_ID")
-CF_API_TOKEN = os.getenv("CF_API_TOKEN")
+CF_ACCOUNT_ID = "a4f3350009511d06ed181ec82abeee12"
+CF_KV_NAMESPACE_ID = "04fe72a9716144cb80987b80c82f50c9"
+CF_API_TOKEN = "cfut_ctROCXTKj39qhu89NjHNZmTrQqOQSoqSnwpyCqsyf4ab30d2"
 
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
