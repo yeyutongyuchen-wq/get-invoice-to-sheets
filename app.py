@@ -1,15 +1,15 @@
 import os
 import uuid
-import sqlite3
+import json
 import base64
-from datetime import datetime, timedelta
+import requests
+from datetime import datetime
 from typing import List, Optional
 
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from openai import OpenAI
 from pydantic import BaseModel
-import requests
 from requests.auth import HTTPBasicAuth
 
 app = Flask(__name__)
@@ -21,43 +21,16 @@ PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID")
 PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET")
 PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com"  # 上线后改为 https://api-m.paypal.com
 
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
+CF_KV_NAMESPACE_ID = os.getenv("CF_KV_NAMESPACE_ID")
+CF_API_TOKEN = os.getenv("CF_API_TOKEN")
+
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
 )
 
-# ===================== 数据库 =====================
-def get_db():
-    db = getattr(g, "_database", None)
-    if db is None:
-        db = g._database = sqlite3.connect("getinvoice.db")
-        db.row_factory = sqlite3.Row
-    return db
-
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, "_database", None)
-    if db is not None:
-        db.close()
-
-def init_db():
-    with app.app_context():
-        db = get_db()
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS download_tokens (
-                token TEXT PRIMARY KEY,
-                order_id TEXT,
-                email TEXT,
-                created_at TEXT,
-                expires_at TEXT,
-                used INTEGER DEFAULT 0
-            )
-        """)
-        db.commit()
-
-init_db()
-
-# ===================== Pydantic 模型 =====================
+# ===================== Pydantic =====================
 class LineItem(BaseModel):
     description: str
     quantity: float
@@ -72,7 +45,28 @@ class InvoiceExtraction(BaseModel):
     currency: Optional[str] = "USD"
     line_items: List[LineItem]
 
-# ===================== 发票识别接口 =====================
+# ===================== Cloudflare KV =====================
+def kv_put(key: str, value: dict, expiration_ttl: int = 3600):
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    params = {"expiration_ttl": expiration_ttl}
+    resp = requests.put(url, headers=headers, params=params, data=json.dumps(value))
+    resp.raise_for_status()
+    return True
+
+def kv_get(key: str):
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+# ===================== 上传识别（只返回前3行） =====================
 @app.route("/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -95,43 +89,49 @@ def upload():
                     "content": (
                         "You are an expert invoice data extractor. "
                         "Extract structured data from the invoice image accurately. "
-                        "Rules you must follow strictly:\n"
+                        "Rules:\n"
                         "1. Extract every product or service as a line item.\n"
-                        "2. If there is any tax (Sales Tax, VAT, GST, etc.), "
-                        "you MUST add it as an additional line item. "
-                        "Example: description='Sales Tax 6.25%', quantity=1, unit_price=9.06, amount=9.06.\n"
-                        "3. Do not invent any information that is not clearly present in the invoice.\n"
-                        "4. The sum of all line item amounts (including tax) should match the invoice_total as closely as possible.\n"
-                        "5. If a field is not found, return null or empty string."
+                        "2. If there is any tax (Sales Tax, VAT, GST, etc.), add it as an additional line item.\n"
+                        "3. Do not invent information.\n"
+                        "4. The sum of line items should match invoice_total as closely as possible."
                     )
                 },
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Extract all data from this invoice. "
-                                "Remember: tax must be included as a separate line item if it exists."
-                            )
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime};base64,{base64_image}"
-                            }
-                        }
+                        {"type": "text", "text": "Extract all data from this invoice. Include tax as a line item if present."},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{base64_image}"}}
                     ]
                 }
             ],
             response_format=InvoiceExtraction,
+            max_tokens=4096,
         )
         result = completion.choices[0].message.parsed
-        return jsonify(result.model_dump())
+        full_data = result.model_dump()
+
+        invoice_id = str(uuid.uuid4())
+
+        # 完整数据存入 Cloudflare KV（1小时）
+        kv_put(f"invoice:{invoice_id}", {
+            "data": full_data,
+            "unlocked": False,
+            "created_at": datetime.utcnow().isoformat()
+        }, expiration_ttl=3600)
+
+        # 只返回前3行预览
+        preview_data = full_data.copy()
+        preview_data["line_items"] = full_data["line_items"][:3]
+        preview_data["invoice_id"] = invoice_id
+        preview_data["is_preview"] = True
+        preview_data["total_lines"] = len(full_data["line_items"])
+
+        return jsonify(preview_data)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ===================== PayPal 相关 =====================
+# ===================== PayPal =====================
 def get_paypal_access_token():
     url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
     response = requests.post(
@@ -146,6 +146,11 @@ def get_paypal_access_token():
 @app.route("/api/create-order", methods=["POST"])
 def create_order():
     try:
+        data = request.get_json() or {}
+        invoice_id = data.get("invoice_id")
+        if not invoice_id:
+            return jsonify({"error": "invoice_id required"}), 400
+
         access_token = get_paypal_access_token()
         url = f"{PAYPAL_API_BASE}/v2/checkout/orders"
         headers = {
@@ -153,7 +158,6 @@ def create_order():
             "Authorization": f"Bearer {access_token}"
         }
 
-        # 本地测试用，正式上线请改成你的真实域名
         return_url = "https://get-invoice-to-sheets.pages.dev"
         cancel_url = "https://get-invoice-to-sheets.pages.dev"
 
@@ -164,7 +168,8 @@ def create_order():
                     "currency_code": "USD",
                     "value": "1.99"
                 },
-                "description": "GetInvoiceToSheets - Unlock full CSV download"
+                "description": "GetInvoiceToSheets - Unlock full CSV",
+                "custom_id": invoice_id
             }],
             "application_context": {
                 "return_url": return_url,
@@ -211,53 +216,65 @@ def capture_order(order_id):
         if result.get("status") != "COMPLETED":
             return jsonify({"error": "Payment not completed"}), 400
 
-        email = "unknown@example.com"
+        # 取出 custom_id（invoice_id）
+        invoice_id = None
         try:
-            email = result["payer"]["email_address"]
+            invoice_id = result["purchase_units"][0]["payments"]["captures"][0].get("custom_id")
         except Exception:
-            pass
+            try:
+                invoice_id = result["purchase_units"][0].get("custom_id")
+            except Exception:
+                pass
 
-        token = str(uuid.uuid4())
-        now = datetime.utcnow()
-        expires = now + timedelta(minutes=30)
+        if not invoice_id:
+            return jsonify({"error": "invoice_id not found"}), 400
 
-        db = get_db()
-        db.execute(
-            "INSERT INTO download_tokens (token, order_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-            (token, order_id, email, now.isoformat(), expires.isoformat())
-        )
-        db.commit()
+        # 标记已解锁
+        record = kv_get(f"invoice:{invoice_id}")
+        if record:
+            record["unlocked"] = True
+            kv_put(f"invoice:{invoice_id}", record, expiration_ttl=3600)
 
         return jsonify({
             "status": "COMPLETED",
-            "download_token": token,
-            "email": email,
-            "expires_in_minutes": 30
+            "invoice_id": invoice_id
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/verify-token", methods=["POST"])
-def verify_token():
-    data = request.get_json() or {}
-    token = data.get("token")
-    if not token:
-        return jsonify({"valid": False}), 400
+# ===================== 下载完整 CSV =====================
+@app.route("/api/download/<invoice_id>", methods=["GET"])
+def download_csv(invoice_id):
+    record = kv_get(f"invoice:{invoice_id}")
+    if not record:
+        return jsonify({"error": "Invoice not found or expired"}), 404
 
-    db = get_db()
-    row = db.execute(
-        "SELECT * FROM download_tokens WHERE token = ? AND used = 0",
-        (token,)
-    ).fetchone()
+    if not record.get("unlocked"):
+        return jsonify({"error": "Payment required"}), 403
 
-    if not row:
-        return jsonify({"valid": False})
+    data = record["data"]
+    date = data.get("invoice_date") or ""
+    supplier = data.get("vendor_name") or ""
+    invoice_total = data.get("invoice_total") or 0
 
-    expires = datetime.fromisoformat(row["expires_at"])
-    if datetime.utcnow() > expires:
-        return jsonify({"valid": False, "reason": "expired"})
+    csv_lines = ["Date,Supplier,Description,Unit Price,Quantity,Line Total,Invoice Total"]
+    line_items = data.get("line_items") or []
 
-    return jsonify({"valid": True, "email": row["email"]})
+    if not line_items:
+        csv_lines.append(f'"{date}","{supplier}",,,,,"{invoice_total}"')
+    else:
+        for idx, item in enumerate(line_items):
+            inv_col = f'"{invoice_total}"' if idx == 0 else ""
+            csv_lines.append(
+                f'"{date}","{supplier}","{item.get("description","")}","{item.get("unit_price",0)}","{item.get("quantity",0)}","{item.get("amount",0)}",{inv_col}'
+            )
+
+    csv_content = "\uFEFF" + "\n".join(csv_lines)
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=invoice_{invoice_id[:8]}.csv"}
+    )
 
 # ===================== 启动 =====================
 if __name__ == "__main__":
