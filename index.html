@@ -6,12 +6,9 @@
   <title>GetInvoiceToSheets – Invoice to CSV</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    .drag-active { border-color: #10b981 !important; background-color: #ecfdf5; }
-    .error-field { background-color: #fef2f2 !important; border-color: #ef4444 !important; }
-    .preview-blur {
-      filter: blur(4px);
-      user-select: none;
-      pointer-events: none;
+    .drag-active {
+      border-color: #10b981 !important;
+      background-color: #ecfdf5;
     }
   </style>
 </head>
@@ -30,19 +27,15 @@
   <main class="max-w-7xl mx-auto px-4 py-8">
 
     <!-- 上传区 -->
-<div id="drop-zone"
-     class="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-white mb-8 transition-all cursor-pointer hover:border-emerald-400">
-  <div class="text-5xl mb-4">📄</div>
-  <p class="text-lg font-medium mb-2">Drag & drop invoice image here</p>
-  <p class="text-sm text-gray-500 mb-4">or click to select (JPG / PNG)</p>
-  
-  <input type="file" id="file-input" accept="image/jpeg,image/png" class="hidden" />
-  
-  <label for="file-input"
-         class="inline-block px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition cursor-pointer">
-    Select File
-  </label>
-</div>
+    <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-white mb-8 transition-all cursor-pointer hover:border-emerald-400">
+      <div class="text-5xl mb-4">📄</div>
+      <p class="text-lg font-medium mb-2">Drag & drop invoice image here</p>
+      <p class="text-sm text-gray-500 mb-4">or click to select (JPG / PNG)</p>
+      <input type="file" id="file-input" accept="image/jpeg,image/png" class="hidden" />
+      <label for="file-input" class="inline-block px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition cursor-pointer">
+        Select File
+      </label>
+    </div>
 
     <!-- 加载中 -->
     <div id="loading" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -52,36 +45,34 @@
       </div>
     </div>
 
-    <!-- 主内容区 -->
+    <!-- 主内容 -->
     <div id="main-content" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-      <!-- 左侧预览图 -->
       <div class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
         <h2 class="text-sm font-medium text-gray-500 mb-3">Invoice Preview</h2>
         <img id="preview-img" class="w-full rounded-lg border border-gray-100" alt="Invoice preview" />
       </div>
 
-      <!-- 右侧数据 -->
       <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">Data Review</h2>
           <span id="preview-tip" class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full">
-            Preview – only first 3 rows shown
+            Preview – only first 3 rows
           </span>
         </div>
 
         <div class="grid grid-cols-3 gap-3 mb-5">
           <div>
             <label class="text-xs text-gray-500">Date</label>
-            <input id="invoice-date" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm" readonly />
+            <input id="invoice-date" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
           </div>
           <div>
             <label class="text-xs text-gray-500">Supplier</label>
-            <input id="supplier" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm" readonly />
+            <input id="supplier" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
           </div>
           <div>
             <label class="text-xs text-gray-500">Invoice Total</label>
-            <input id="invoice-total" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm" readonly />
+            <input id="invoice-total" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
           </div>
         </div>
 
@@ -99,12 +90,10 @@
           </table>
         </div>
 
-        <!-- 预览提示 -->
         <div id="more-rows-tip" class="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600 hidden">
           <span id="hidden-count">0</span> more rows are hidden. Pay to unlock the complete data.
         </div>
 
-        <!-- 支付 / 下载区域 -->
         <div class="mt-6 pt-5 border-t border-gray-100">
           <div id="payment-wall" class="bg-gray-50 rounded-xl p-5 border border-gray-200">
             <h3 class="font-semibold text-gray-800 mb-1">Unlock Full Download</h3>
@@ -112,12 +101,15 @@
               Pay <span class="font-bold text-emerald-600">$1.99</span> to download the complete CSV file.
               No registration required.
             </p>
-            <div id="paypal-button-container"></div>
+            <div id="paypal-button-container">
+              <button id="pay-btn" class="w-full py-3 bg-[#0070ba] hover:bg-[#005ea6] text-white font-medium rounded-lg transition">
+                Pay $1.99 with PayPal
+              </button>
+            </div>
             <p class="text-xs text-gray-400 mt-3 text-center">Secure payment powered by PayPal</p>
           </div>
 
-          <button id="download-csv-btn"
-                  class="hidden w-full mt-4 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition">
+          <button id="download-csv-btn" class="hidden w-full mt-4 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition">
             Download Full CSV
           </button>
         </div>
@@ -141,25 +133,34 @@
     const moreRowsTip = document.getElementById('more-rows-tip');
     const hiddenCount = document.getElementById('hidden-count');
     const previewTip = document.getElementById('preview-tip');
+    const payBtn = document.getElementById('pay-btn');
 
     // 拖拽上传
-    dropZone.addEventListener('dragover', (e) => {
+    dropZone.addEventListener('dragover', function(e) {
       e.preventDefault();
       dropZone.classList.add('drag-active');
     });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-active'));
-    dropZone.addEventListener('drop', (e) => {
+
+    dropZone.addEventListener('dragleave', function() {
+      dropZone.classList.remove('drag-active');
+    });
+
+    dropZone.addEventListener('drop', function(e) {
       e.preventDefault();
       dropZone.classList.remove('drag-active');
-      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+      }
     });
-  document.getElementById('file-input').addEventListener('change', (e) => {
-  console.log('文件选择事件触发');
-  if (e.target.files.length) {
-    handleFile(e.target.files[0]);
-  }
-});
 
+    // 文件选择
+    fileInput.addEventListener('change', function(e) {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    // 处理上传
     async function handleFile(file) {
       if (!file.type.match(/image\/(jpeg|png)/)) {
         alert('Please upload JPG or PNG image');
@@ -167,16 +168,151 @@
       }
 
       const reader = new FileReader();
-      reader.onload = (e) => previewImg.src = e.target.result;
+      reader.onload = function(e) {
+        previewImg.src = e.target.result;
+      };
       reader.readAsDataURL(file);
 
       loading.classList.remove('hidden');
+
       const formData = new FormData();
       formData.append('file', file);
 
       try {
-        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        const res = await fetch(API_BASE + '/upload', {
+          method: 'POST',
+          body: formData
+        });
         const data = await res.json();
-        if (data.error) throw new Error(data.error);
 
-        currentInvoiceId =
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        currentInvoiceId = data.invoice_id;
+        populatePreview(data);
+
+        mainContent.classList.remove('hidden');
+        dropZone.classList.add('hidden');
+
+        // 重置为未支付状态
+        paymentWall.classList.remove('hidden');
+        downloadBtn.classList.add('hidden');
+        statusBadge.textContent = 'Free Preview Mode';
+        statusBadge.className = 'text-sm text-gray-500';
+
+      } catch (err) {
+        alert('Recognition failed: ' + err.message);
+      } finally {
+        loading.classList.add('hidden');
+      }
+    }
+
+    // 填充预览数据（只显示前3行）
+    function populatePreview(data) {
+      document.getElementById('invoice-date').value = data.invoice_date || '';
+      document.getElementById('supplier').value = data.vendor_name || '';
+      document.getElementById('invoice-total').value = data.invoice_total || '';
+
+      lineItemsBody.innerHTML = '';
+
+      const items = data.line_items || [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-50';
+        tr.innerHTML =
+          '<td class="py-2 pr-2">' + (item.description || '') + '</td>' +
+          '<td class="py-2 pr-2">' + (item.unit_price || '') + '</td>' +
+          '<td class="py-2 pr-2">' + (item.quantity || '') + '</td>' +
+          '<td class="py-2 pr-2">' + (item.amount || '') + '</td>';
+        lineItemsBody.appendChild(tr);
+      }
+
+      const total = data.total_lines || 0;
+      const shown = items.length;
+      if (total > shown) {
+        hiddenCount.textContent = total - shown;
+        moreRowsTip.classList.remove('hidden');
+        previewTip.classList.remove('hidden');
+      } else {
+        moreRowsTip.classList.add('hidden');
+        previewTip.classList.add('hidden');
+      }
+    }
+
+    // 发起支付
+    async function startPayPalPayment() {
+      if (!currentInvoiceId) {
+        alert('Please upload an invoice first');
+        return;
+      }
+
+      try {
+        const res = await fetch(API_BASE + '/api/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoice_id: currentInvoiceId })
+        });
+        const data = await res.json();
+
+        if (data.approve_url) {
+          window.location.href = data.approve_url;
+        } else {
+          alert('Failed to create payment order: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Payment request failed');
+      }
+    }
+
+    payBtn.addEventListener('click', startPayPalPayment);
+
+    // 下载完整 CSV
+    downloadBtn.addEventListener('click', function() {
+      if (!currentInvoiceId) {
+        alert('No invoice to download');
+        return;
+      }
+      window.location.href = API_BASE + '/api/download/' + currentInvoiceId;
+    });
+
+    // 解锁下载
+    function unlockDownload() {
+      paymentWall.classList.add('hidden');
+      downloadBtn.classList.remove('hidden');
+      statusBadge.textContent = 'Unlocked – Download Ready';
+      statusBadge.className = 'text-sm text-emerald-600 font-medium';
+      moreRowsTip.classList.add('hidden');
+      previewTip.classList.add('hidden');
+    }
+
+    // 处理 PayPal 返回
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    const payerId = urlParams.get('PayerID');
+
+    if (token && payerId) {
+      fetch(API_BASE + '/api/capture-order/' + token, {
+        method: 'POST'
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(details) {
+        if (details.status === 'COMPLETED' && details.invoice_id) {
+          currentInvoiceId = details.invoice_id;
+          window.history.replaceState({}, document.title, window.location.pathname);
+          unlockDownload();
+          alert('Payment successful! You can now download the full CSV.');
+        } else {
+          alert('Payment confirmation failed');
+        }
+      })
+      .catch(function(err) {
+        console.error(err);
+        alert('Payment confirmation error');
+      });
+    }
+  </script>
+</body>
+</html>
