@@ -300,11 +300,16 @@
       .then(function(res) { return res.json(); })
       .then(function(details) {
         if (details.status === 'COMPLETED' && details.invoice_id) {
-          currentInvoiceId = details.invoice_id;
-          window.history.replaceState({}, document.title, window.location.pathname);
-          unlockDownload();
-          alert('Payment successful! You can now download the full CSV.');
-        } else {
+  currentInvoiceId = details.invoice_id;
+  window.history.replaceState({}, document.title, window.location.pathname);
+  
+  // 显示主内容区域
+  document.getElementById('main-content').classList.remove('hidden');
+  document.getElementById('drop-zone').classList.add('hidden');
+  
+  unlockDownload();
+  alert('Payment successful! You can now download the full CSV.');
+} else {
           alert('Payment confirmation failed');
         }
       })
