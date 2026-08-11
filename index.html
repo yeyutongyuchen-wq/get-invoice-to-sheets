@@ -10,12 +10,33 @@
       border-color: #10b981 !important;
       background-color: #ecfdf5;
     }
+    /* 预览态禁止选中整表 */
+    .no-select {
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+    }
     @keyframes soft-pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
       50% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0); }
     }
     .pulse-btn {
       animation: soft-pulse 2s infinite;
+    }
+    /* 输入框样式 */
+    .cell-input {
+      width: 100%;
+      padding: 4px 6px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .cell-input:focus {
+      outline: none;
+      border-color: #10b981;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
     }
   </style>
 </head>
@@ -48,18 +69,20 @@
     <div id="loading" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl px-8 py-6 shadow-xl text-center">
         <div class="animate-spin w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-        <p class="font-medium">AI is extracting data...</p>
+        <p id="loading-text" class="font-medium">AI is extracting data...</p>
       </div>
     </div>
 
     <!-- 状态2 & 3：主内容区 -->
     <div id="main-content" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6">
 
+      <!-- 左侧预览图 -->
       <div class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
         <h2 class="text-sm font-medium text-gray-500 mb-3">Invoice Preview</h2>
         <img id="preview-img" class="w-full rounded-lg border border-gray-100" alt="Invoice preview" />
       </div>
 
+      <!-- 右侧数据 -->
       <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">Data Review</h2>
@@ -68,23 +91,24 @@
           </span>
         </div>
 
+        <!-- 顶部字段（可编辑） -->
         <div class="grid grid-cols-3 gap-3 mb-5">
           <div>
             <label class="text-xs text-gray-500">Date</label>
-            <input id="invoice-date" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
+            <input id="invoice-date" type="text" class="cell-input mt-1" />
           </div>
           <div>
             <label class="text-xs text-gray-500">Supplier</label>
-            <input id="supplier" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
+            <input id="supplier" type="text" class="cell-input mt-1" />
           </div>
           <div>
             <label class="text-xs text-gray-500">Invoice Total</label>
-            <input id="invoice-total" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
+            <input id="invoice-total" type="text" class="cell-input mt-1" />
           </div>
         </div>
 
-        <!-- 表格：前3行清晰显示 -->
-        <div class="overflow-x-auto">
+        <!-- 表格（可编辑 + 预览态禁止选中） -->
+        <div id="table-wrap" class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="text-left text-gray-500 border-b">
@@ -98,7 +122,7 @@
           </table>
         </div>
 
-        <!-- 锁定提示（表格下方） -->
+        <!-- 锁定提示 -->
         <div id="frosted-mask" class="hidden mt-3 p-4 bg-gray-50 border border-dashed border-gray-300 rounded-lg text-center">
           <p class="text-sm font-medium text-gray-700 mb-1">More rows are locked</p>
           <p class="text-xs text-gray-500">Pay $1.99 to unlock full data</p>
@@ -148,6 +172,7 @@
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loading-text');
     const mainContent = document.getElementById('main-content');
     const previewImg = document.getElementById('preview-img');
     const lineItemsBody = document.getElementById('line-items-body');
@@ -161,6 +186,7 @@
     const previewTip = document.getElementById('preview-tip');
     const frostedMask = document.getElementById('frosted-mask');
     const payBtn = document.getElementById('pay-btn');
+    const tableWrap = document.getElementById('table-wrap');
 
     function showState1() {
       dropZone.classList.remove('hidden');
@@ -170,6 +196,7 @@
       frostedMask.classList.add('hidden');
       previewTip.classList.add('hidden');
       moreRowsTip.classList.add('hidden');
+      tableWrap.classList.remove('no-select');
       statusBadge.textContent = 'Free Preview Mode';
       statusBadge.className = 'text-sm text-gray-500';
       currentInvoiceId = null;
@@ -185,6 +212,7 @@
       unlockedActions.classList.add('hidden');
       frostedMask.classList.remove('hidden');
       previewTip.classList.remove('hidden');
+      tableWrap.classList.add('no-select'); // 预览态禁止选中
       statusBadge.textContent = 'Free Preview Mode';
       statusBadge.className = 'text-sm text-gray-500';
     }
@@ -197,10 +225,12 @@
       frostedMask.classList.add('hidden');
       previewTip.classList.add('hidden');
       moreRowsTip.classList.add('hidden');
+      tableWrap.classList.remove('no-select'); // 解锁后允许选中
       statusBadge.textContent = 'Unlocked – Download Ready';
       statusBadge.className = 'text-sm text-emerald-600 font-medium';
     }
 
+    // 拖拽上传
     dropZone.addEventListener('dragover', function(e) {
       e.preventDefault();
       dropZone.classList.add('drag-active');
@@ -230,6 +260,7 @@
       };
       reader.readAsDataURL(file);
 
+      loadingText.textContent = 'AI is extracting data...';
       loading.classList.remove('hidden');
       const formData = new FormData();
       formData.append('file', file);
@@ -252,6 +283,7 @@
       }
     }
 
+    // 用可编辑 input 填充表格
     function populateTable(data, isFull) {
       document.getElementById('invoice-date').value = data.invoice_date || '';
       document.getElementById('supplier').value = data.vendor_name || '';
@@ -259,14 +291,15 @@
 
       lineItemsBody.innerHTML = '';
       const items = data.line_items || [];
+
       items.forEach(function(item) {
         const tr = document.createElement('tr');
         tr.className = 'border-b border-gray-50';
         tr.innerHTML =
-          '<td class="py-2 pr-2">' + (item.description || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.unit_price || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.quantity || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.amount || '') + '</td>';
+          '<td class="py-1.5 pr-2"><input class="cell-input" value="' + escapeHtml(item.description || '') + '"></td>' +
+          '<td class="py-1.5 pr-2"><input class="cell-input" value="' + escapeHtml(String(item.unit_price ?? '')) + '"></td>' +
+          '<td class="py-1.5 pr-2"><input class="cell-input" value="' + escapeHtml(String(item.quantity ?? '')) + '"></td>' +
+          '<td class="py-1.5 pr-2"><input class="cell-input" value="' + escapeHtml(String(item.amount ?? '')) + '"></td>';
         lineItemsBody.appendChild(tr);
       });
 
@@ -281,6 +314,15 @@
       }
     }
 
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    // 支付
     payBtn.addEventListener('click', async function() {
       if (!currentInvoiceId) {
         alert('Please upload an invoice first');
@@ -307,22 +349,26 @@
       }
     });
 
+    // 下载
     downloadBtn.addEventListener('click', function() {
       if (!currentInvoiceId) return;
       window.location.href = API_BASE + '/api/download/' + currentInvoiceId;
     });
 
+    // 继续上传
     uploadAnotherBtn.addEventListener('click', function() {
       showState1();
     });
 
-    // 支付返回处理（语法正确）
+    // 支付返回（只读 KV，不重新 AI 提取）
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
     const payerId = urlParams.get('PayerID');
 
     if (token && payerId) {
+      loadingText.textContent = 'Confirming payment...';
       loading.classList.remove('hidden');
+
       fetch(API_BASE + '/api/capture-order/' + token, { method: 'POST' })
         .then(function(res) { return res.json(); })
         .then(function(details) {
@@ -351,6 +397,7 @@
         })
         .finally(function() {
           loading.classList.add('hidden');
+          loadingText.textContent = 'AI is extracting data...';
         });
     }
   </script>
