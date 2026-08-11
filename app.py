@@ -25,6 +25,8 @@ CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
 CF_KV_NAMESPACE_ID = os.getenv("CF_KV_NAMESPACE_ID")
 CF_API_TOKEN = os.getenv("CF_API_TOKEN")
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
@@ -45,7 +47,7 @@ class InvoiceExtraction(BaseModel):
     currency: Optional[str] = "USD"
     line_items: List[LineItem]
 
-# ===================== Cloudflare KV 工具 =====================
+# ===================== Cloudflare KV =====================
 def kv_put(key: str, value: dict, expiration_ttl: int = 3600):
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
     headers = {
@@ -66,7 +68,66 @@ def kv_get(key: str):
     resp.raise_for_status()
     return resp.json()
 
-# ===================== 上传识别（只返回前3行预览） =====================
+# ===================== CSV & 邮件 =====================
+def build_csv_content(data: dict) -> str:
+    date = data.get("invoice_date") or ""
+    supplier = data.get("vendor_name") or ""
+    invoice_total = data.get("invoice_total") or 0
+    line_items = data.get("line_items") or []
+
+    lines = ["Date,Supplier,Description,Unit Price,Quantity,Line Total,Invoice Total"]
+    if not line_items:
+        lines.append(f'"{date}","{supplier}",,,,,"{invoice_total}"')
+    else:
+        for idx, item in enumerate(line_items):
+            inv_col = f'"{invoice_total}"' if idx == 0 else ""
+            lines.append(
+                f'"{date}","{supplier}","{item.get("description","")}","{item.get("unit_price",0)}","{item.get("quantity",0)}","{item.get("amount",0)}",{inv_col}'
+            )
+    return "\uFEFF" + "\n".join(lines)
+
+def send_csv_email(to_email: str, invoice_id: str, csv_content: str) -> bool:
+    if not to_email or not RESEND_API_KEY:
+        print("Skip email: missing email or RESEND_API_KEY")
+        return False
+
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    b64_csv = base64.b64encode(csv_content.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "from": "GetInvoiceToSheets <onboarding@resend.dev>",
+        "to": [to_email],
+        "subject": "Your invoice CSV is ready – GetInvoiceToSheets",
+        "html": """
+            <p>Hi,</p>
+            <p>Thanks for your purchase.</p>
+            <p>Your invoice has been converted to CSV. The file is attached to this email.</p>
+            <p>You can also download it again within 1 hour from the website.</p>
+            <p>– GetInvoiceToSheets</p>
+        """,
+        "attachments": [
+            {
+                "filename": f"invoice_{invoice_id[:8]}.csv",
+                "content": b64_csv
+            }
+        ]
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        print(f"Email sent to {to_email}")
+        return True
+    except Exception as e:
+        print(f"Send email failed: {e}")
+        return False
+
+# ===================== 上传识别 =====================
 @app.route("/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -116,6 +177,7 @@ def upload():
         kv_put(f"invoice:{invoice_id}", {
             "data": full_data,
             "unlocked": False,
+            "customer_email": "",
             "created_at": datetime.utcnow().isoformat()
         }, expiration_ttl=3600)
 
@@ -174,8 +236,16 @@ def create_order():
     try:
         data = request.get_json() or {}
         invoice_id = data.get("invoice_id")
+        customer_email = (data.get("email") or "").strip()
+
         if not invoice_id:
             return jsonify({"error": "invoice_id required"}), 400
+
+        # 把邮箱存进该发票记录
+        record = kv_get(f"invoice:{invoice_id}")
+        if record:
+            record["customer_email"] = customer_email
+            kv_put(f"invoice:{invoice_id}", record, expiration_ttl=3600)
 
         access_token = get_paypal_access_token()
         url = f"{PAYPAL_API_BASE}/v2/checkout/orders"
@@ -259,6 +329,18 @@ def capture_order(order_id):
             record["unlocked"] = True
             kv_put(f"invoice:{invoice_id}", record, expiration_ttl=3600)
 
+            # 决定收件邮箱：优先用户填写的，其次 PayPal 付款邮箱
+            to_email = (record.get("customer_email") or "").strip()
+            if not to_email:
+                try:
+                    to_email = result.get("payer", {}).get("email_address", "")
+                except Exception:
+                    to_email = ""
+
+            if to_email:
+                csv_content = build_csv_content(record["data"])
+                send_csv_email(to_email, invoice_id, csv_content)
+
         return jsonify({
             "status": "COMPLETED",
             "invoice_id": invoice_id
@@ -276,24 +358,7 @@ def download_csv(invoice_id):
     if not record.get("unlocked"):
         return jsonify({"error": "Payment required"}), 403
 
-    data = record["data"]
-    date = data.get("invoice_date") or ""
-    supplier = data.get("vendor_name") or ""
-    invoice_total = data.get("invoice_total") or 0
-
-    csv_lines = ["Date,Supplier,Description,Unit Price,Quantity,Line Total,Invoice Total"]
-    line_items = data.get("line_items") or []
-
-    if not line_items:
-        csv_lines.append(f'"{date}","{supplier}",,,,,"{invoice_total}"')
-    else:
-        for idx, item in enumerate(line_items):
-            inv_col = f'"{invoice_total}"' if idx == 0 else ""
-            csv_lines.append(
-                f'"{date}","{supplier}","{item.get("description","")}","{item.get("unit_price",0)}","{item.get("quantity",0)}","{item.get("amount",0)}",{inv_col}'
-            )
-
-    csv_content = "\uFEFF" + "\n".join(csv_lines)
+    csv_content = build_csv_content(record["data"])
     return Response(
         csv_content,
         mimetype="text/csv",
