@@ -30,7 +30,6 @@ client = OpenAI(
     api_key=OPENROUTER_API_KEY,
 )
 
-# ===================== Pydantic =====================
 # ===================== Pydantic 模型 =====================
 class LineItem(BaseModel):
     description: str
@@ -46,7 +45,6 @@ class InvoiceExtraction(BaseModel):
     currency: Optional[str] = "USD"
     line_items: List[LineItem]
 
-# ===================== Cloudflare KV =====================
 # ===================== Cloudflare KV 工具 =====================
 def kv_put(key: str, value: dict, expiration_ttl: int = 3600):
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
@@ -68,7 +66,6 @@ def kv_get(key: str):
     resp.raise_for_status()
     return resp.json()
 
-# ===================== 上传识别（只返回前3行） =====================
 # ===================== 上传识别（只返回前3行预览） =====================
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -94,7 +91,6 @@ def upload():
                         "Extract structured data from the invoice image accurately. "
                         "Rules:\n"
                         "1. Extract every product or service as a line item.\n"
-                        "2. If there is any tax (Sales Tax, VAT, GST, etc.), add it as an additional line item.\n"
                         "2. If there is any tax (Sales Tax, VAT, GST, etc.), "
                         "add it as an additional line item.\n"
                         "3. Do not invent information.\n"
@@ -117,16 +113,12 @@ def upload():
 
         invoice_id = str(uuid.uuid4())
 
-        # 完整数据存入 Cloudflare KV（1小时）
-        # 完整数据存入 Cloudflare KV（1小时过期）
         kv_put(f"invoice:{invoice_id}", {
             "data": full_data,
             "unlocked": False,
             "created_at": datetime.utcnow().isoformat()
         }, expiration_ttl=3600)
 
-        # 只返回前3行预览
-        # 只返回前3行给前端（脱水预览）
         preview_data = full_data.copy()
         preview_data["line_items"] = full_data["line_items"][:3]
         preview_data["invoice_id"] = invoice_id
@@ -139,7 +131,7 @@ def upload():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ===================== 获取发票数据（支付后拉取完整数据用） =====================
+# ===================== 获取发票数据 =====================
 @app.route("/api/invoice/<invoice_id>", methods=["GET"])
 def get_invoice(invoice_id):
     record = kv_get(f"invoice:{invoice_id}")
@@ -150,7 +142,6 @@ def get_invoice(invoice_id):
     unlocked = record.get("unlocked", False)
 
     if not unlocked:
-        # 未解锁只返回前3行
         preview = data.copy()
         preview["line_items"] = data["line_items"][:3]
         preview["invoice_id"] = invoice_id
@@ -159,7 +150,6 @@ def get_invoice(invoice_id):
         preview["unlocked"] = False
         return jsonify(preview)
 
-    # 已解锁返回完整数据
     full = data.copy()
     full["invoice_id"] = invoice_id
     full["is_preview"] = False
@@ -252,8 +242,6 @@ def capture_order(order_id):
         if result.get("status") != "COMPLETED":
             return jsonify({"error": "Payment not completed"}), 400
 
-        # 取出 custom_id（invoice_id）
-        # 从 PayPal 返回结果取出 custom_id（invoice_id）
         invoice_id = None
         try:
             invoice_id = result["purchase_units"][0]["payments"]["captures"][0].get("custom_id")
@@ -264,11 +252,8 @@ def capture_order(order_id):
                 pass
 
         if not invoice_id:
-            return jsonify({"error": "invoice_id not found"}), 400
             return jsonify({"error": "invoice_id not found in payment"}), 400
 
-        # 标记已解锁
-        # 标记该发票已解锁
         record = kv_get(f"invoice:{invoice_id}")
         if record:
             record["unlocked"] = True
@@ -312,7 +297,6 @@ def download_csv(invoice_id):
     return Response(
         csv_content,
         mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=invoice_{invoice_id[:8]}.csv"}
         headers={
             "Content-Disposition": f"attachment; filename=invoice_{invoice_id[:8]}.csv"
         }
