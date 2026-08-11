@@ -1,365 +1,325 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GetInvoiceToSheets – Invoice to CSV</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    .drag-active {
-      border-color: #10b981 !important;
-      background-color: #ecfdf5;
+@@ -1,282 +1,314 @@
+import os
+import uuid
+import json
+import base64
+import requests
+from datetime import datetime
+from typing import List, Optional
+
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
+from openai import OpenAI
+from pydantic import BaseModel
+from requests.auth import HTTPBasicAuth
+
+app = Flask(__name__)
+CORS(app)
+
+# ===================== 配置 =====================
+OPENROUTER_API_KEY = os.getenv("OPENAI_API_KEY")
+PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID")
+PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET")
+PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com"  # 上线后改为 https://api-m.paypal.com
+
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
+CF_KV_NAMESPACE_ID = os.getenv("CF_KV_NAMESPACE_ID")
+CF_API_TOKEN = os.getenv("CF_API_TOKEN")
+
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+
+# ===================== Pydantic =====================
+# ===================== Pydantic 模型 =====================
+class LineItem(BaseModel):
+    description: str
+    quantity: float
+    unit_price: float
+    amount: float
+
+class InvoiceExtraction(BaseModel):
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    vendor_name: Optional[str] = None
+    invoice_total: float
+    currency: Optional[str] = "USD"
+    line_items: List[LineItem]
+
+# ===================== Cloudflare KV =====================
+# ===================== Cloudflare KV 工具 =====================
+def kv_put(key: str, value: dict, expiration_ttl: int = 3600):
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Content-Type": "application/json"
     }
-    @keyframes soft-pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
-      50% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0); }
-    }
-    .pulse-btn {
-      animation: soft-pulse 2s infinite;
-    }
-  </style>
-</head>
-<body class="bg-gray-50 min-h-screen text-gray-800">
+    params = {"expiration_ttl": expiration_ttl}
+    resp = requests.put(url, headers=headers, params=params, data=json.dumps(value))
+    resp.raise_for_status()
+    return True
 
-  <header class="bg-white border-b border-gray-200">
-    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white font-bold">G</div>
-        <h1 class="text-xl font-semibold">GetInvoiceToSheets</h1>
-      </div>
-      <div id="status-badge" class="text-sm text-gray-500">Free Preview Mode</div>
-    </div>
-  </header>
+def kv_get(key: str):
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
 
-  <main class="max-w-7xl mx-auto px-4 py-8">
+# ===================== 上传识别（只返回前3行） =====================
+# ===================== 上传识别（只返回前3行预览） =====================
+@app.route("/upload", methods=["POST"])
+def upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
 
-    <!-- 状态1：初始拖拽区 -->
-    <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-white mb-8 transition-all cursor-pointer hover:border-emerald-400">
-      <div class="text-5xl mb-4">📄</div>
-      <p class="text-lg font-medium mb-2">Drag & drop invoice image here</p>
-      <p class="text-sm text-gray-500 mb-4">or click to select (JPG / PNG)</p>
-      <input type="file" id="file-input" accept="image/jpeg,image/png" class="hidden" />
-      <label for="file-input" class="inline-block px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition cursor-pointer">
-        Select File
-      </label>
-    </div>
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
 
-    <!-- 加载中 -->
-    <div id="loading" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div class="bg-white rounded-xl px-8 py-6 shadow-xl text-center">
-        <div class="animate-spin w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-        <p class="font-medium">AI is extracting data...</p>
-      </div>
-    </div>
+    image_bytes = file.read()
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    mime = file.mimetype or "image/jpeg"
 
-    <!-- 状态2 & 3：主内容区 -->
-    <div id="main-content" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-      <!-- 左侧预览图 -->
-      <div class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-        <h2 class="text-sm font-medium text-gray-500 mb-3">Invoice Preview</h2>
-        <img id="preview-img" class="w-full rounded-lg border border-gray-100" alt="Invoice preview" />
-      </div>
-
-      <!-- 右侧数据 -->
-      <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">Data Review</h2>
-          <span id="preview-tip" class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full hidden">
-            Preview – only first 3 rows
-          </span>
-        </div>
-
-        <div class="grid grid-cols-3 gap-3 mb-5">
-          <div>
-            <label class="text-xs text-gray-500">Date</label>
-            <input id="invoice-date" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
-          </div>
-          <div>
-            <label class="text-xs text-gray-500">Supplier</label>
-            <input id="supplier" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
-          </div>
-          <div>
-            <label class="text-xs text-gray-500">Invoice Total</label>
-            <input id="invoice-total" type="text" class="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50" readonly />
-          </div>
-        </div>
-
-        <!-- 表格（前3行始终清晰可见） -->
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-left text-gray-500 border-b">
-                <th class="pb-2 font-medium">Description</th>
-                <th class="pb-2 font-medium w-24">Unit Price</th>
-                <th class="pb-2 font-medium w-20">Qty</th>
-                <th class="pb-2 font-medium w-24">Line Total</th>
-              </tr>
-            </thead>
-            <tbody id="line-items-body"></tbody>
-          </table>
-        </div>
-
-        <!-- 锁定提示（放在表格下方，不遮挡前3行） -->
-        <div id="frosted-mask" class="hidden mt-3 p-4 bg-gray-50 border border-dashed border-gray-300 rounded-lg text-center">
-          <p class="text-sm font-medium text-gray-700 mb-1">More rows are locked</p>
-          <p class="text-xs text-gray-500">Pay $1.99 to unlock full data</p>
-        </div>
-
-        <div id="more-rows-tip" class="mt-3 text-sm text-gray-500 hidden">
-          <span id="hidden-count">0</span> more rows are hidden.
-        </div>
-
-        <div class="mt-6 pt-5 border-t border-gray-100">
-          <!-- 状态2：付费墙 -->
-          <div id="payment-wall" class="bg-gray-50 rounded-xl p-5 border border-gray-200">
-            <h3 class="font-semibold text-gray-800 mb-1">Unlock Full Download</h3>
-            <p class="text-sm text-gray-600 mb-4">
-              Pay <span class="font-bold text-emerald-600">$1.99</span> to download the complete CSV file.
-              No registration required.
-            </p>
-            <button id="pay-btn" class="w-full py-3 bg-[#0070ba] hover:bg-[#005ea6] text-white font-medium rounded-lg transition">
-              Pay $1.99 with PayPal
-            </button>
-            <p class="text-xs text-gray-400 mt-3 text-center">Secure payment powered by PayPal</p>
-          </div>
-
-          <!-- 状态3：下载 + 继续上传 + 订阅引导 -->
-          <div id="unlocked-actions" class="hidden space-y-3">
-            <button id="download-csv-btn" class="w-full px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition text-base">
-              Download Full CSV
-            </button>
-
-            <button id="upload-another-btn" class="w-full px-6 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl shadow transition pulse-btn text-base">
-              ⚡ Upload Another Invoice
-            </button>
-
-            <p class="text-center text-xs text-gray-500 pt-1 leading-relaxed">
-              Have multiple invoices?<br>
-              <span class="text-blue-600 font-medium">Save 50% with our $29/month Unlimited Plan</span>
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </main>
-
-  <script>
-    const API_BASE = 'https://get-invoice-to-sheets-production.up.railway.app';
-    let currentInvoiceId = null;
-    let currentPreviewDataUrl = null;
-
-    const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('file-input');
-    const loading = document.getElementById('loading');
-    const mainContent = document.getElementById('main-content');
-    const previewImg = document.getElementById('preview-img');
-    const lineItemsBody = document.getElementById('line-items-body');
-    const paymentWall = document.getElementById('payment-wall');
-    const unlockedActions = document.getElementById('unlocked-actions');
-    const downloadBtn = document.getElementById('download-csv-btn');
-    const uploadAnotherBtn = document.getElementById('upload-another-btn');
-    const statusBadge = document.getElementById('status-badge');
-    const moreRowsTip = document.getElementById('more-rows-tip');
-    const hiddenCount = document.getElementById('hidden-count');
-    const previewTip = document.getElementById('preview-tip');
-    const frostedMask = document.getElementById('frosted-mask');
-    const payBtn = document.getElementById('pay-btn');
-
-    function showState1() {
-      dropZone.classList.remove('hidden');
-      mainContent.classList.add('hidden');
-      paymentWall.classList.remove('hidden');
-      unlockedActions.classList.add('hidden');
-      frostedMask.classList.add('hidden');
-      previewTip.classList.add('hidden');
-      moreRowsTip.classList.add('hidden');
-      statusBadge.textContent = 'Free Preview Mode';
-      statusBadge.className = 'text-sm text-gray-500';
-      currentInvoiceId = null;
-      currentPreviewDataUrl = null;
-      fileInput.value = '';
-      lineItemsBody.innerHTML = '';
-    }
-
-    function showState2() {
-      dropZone.classList.add('hidden');
-      mainContent.classList.remove('hidden');
-      paymentWall.classList.remove('hidden');
-      unlockedActions.classList.add('hidden');
-      frostedMask.classList.remove('hidden');
-      previewTip.classList.remove('hidden');
-      statusBadge.textContent = 'Free Preview Mode';
-      statusBadge.className = 'text-sm text-gray-500';
-    }
-
-    function showState3() {
-      dropZone.classList.add('hidden');
-      mainContent.classList.remove('hidden');
-      paymentWall.classList.add('hidden');
-      unlockedActions.classList.remove('hidden');
-      frostedMask.classList.add('hidden');
-      previewTip.classList.add('hidden');
-      moreRowsTip.classList.add('hidden');
-      statusBadge.textContent = 'Unlocked – Download Ready';
-      statusBadge.className = 'text-sm text-emerald-600 font-medium';
-    }
-
-    // 拖拽上传
-    dropZone.addEventListener('dragover', function(e) {
-      e.preventDefault();
-      dropZone.classList.add('drag-active');
-    });
-    dropZone.addEventListener('dragleave', function() {
-      dropZone.classList.remove('drag-active');
-    });
-    dropZone.addEventListener('drop', function(e) {
-      e.preventDefault();
-      dropZone.classList.remove('drag-active');
-      if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', function(e) {
-      if (e.target.files.length > 0) handleFile(e.target.files[0]);
-    });
-
-    async function handleFile(file) {
-      if (!file.type.match(/image\/(jpeg|png)/)) {
-        alert('Please upload JPG or PNG image');
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        currentPreviewDataUrl = e.target.result;
-        previewImg.src = currentPreviewDataUrl;
-      };
-      reader.readAsDataURL(file);
-
-      loading.classList.remove('hidden');
-      const formData = new FormData();
-      formData.append('file', file);
-
-      try {
-        const res = await fetch(API_BASE + '/upload', {
-          method: 'POST',
-          body: formData
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
-        currentInvoiceId = data.invoice_id;
-        populateTable(data, false);
-        showState2();
-      } catch (err) {
-        alert('Recognition failed: ' + err.message);
-      } finally {
-        loading.classList.add('hidden');
-      }
-    }
-
-    function populateTable(data, isFull) {
-      document.getElementById('invoice-date').value = data.invoice_date || '';
-      document.getElementById('supplier').value = data.vendor_name || '';
-      document.getElementById('invoice-total').value = data.invoice_total || '';
-
-      lineItemsBody.innerHTML = '';
-      const items = data.line_items || [];
-      items.forEach(function(item) {
-        const tr = document.createElement('tr');
-        tr.className = 'border-b border-gray-50';
-        tr.innerHTML =
-          '<td class="py-2 pr-2">' + (item.description || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.unit_price || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.quantity || '') + '</td>' +
-          '<td class="py-2 pr-2">' + (item.amount || '') + '</td>';
-        lineItemsBody.appendChild(tr);
-      });
-
-      const total = data.total_lines || items.length;
-      if (!isFull && total > items.length) {
-        hiddenCount.textContent = total - items.length;
-        moreRowsTip.classList.remove('hidden');
-        frostedMask.classList.remove('hidden');
-      } else {
-        moreRowsTip.classList.add('hidden');
-        frostedMask.classList.add('hidden');
-      }
-    }
-
-    // 支付
-    payBtn.addEventListener('click', async function() {
-      if (!currentInvoiceId) {
-        alert('Please upload an invoice first');
-        return;
-      }
-      if (currentPreviewDataUrl) {
-        localStorage.setItem('invoice_preview_' + currentInvoiceId, currentPreviewDataUrl);
-      }
-      try {
-        const res = await fetch(API_BASE + '/api/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoice_id: currentInvoiceId })
-        });
-        const data = await res.json();
-        if (data.approve_url) {
-          window.location.href = data.approve_url;
-        } else {
-          alert('Failed to create payment order');
-        }
-      } catch (err) {
-        alert('Payment request failed');
-      }
-    });
-
-    // 下载（静默下载，不跳转）
-    downloadBtn.addEventListener('click', function() {
-      if (!currentInvoiceId) return;
-      window.location.href = API_BASE + '/api/download/' + currentInvoiceId;
-    });
-
-    // 继续上传
-    uploadAnotherBtn.addEventListener('click', function() {
-      showState1();
-    });
-
-    // 支付返回处理
-    const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('token');
-    const payerId = urlParams.get('PayerID');
-
-    if (token && payerId) {
-      loading.classList.remove('hidden');
-      fetch(API_BASE + '/api/capture-order/' + token, { method: 'POST' })
-        .then(function(res) { return res.json(); })
-        .then(function(details) {
-          if (details.status === 'COMPLETED' && details.invoice_id) {
-            currentInvoiceId = details.invoice_id;
-            window.history.replaceState({}, document.title, window.location.pathname);
-
-            return fetch(API_BASE + '/api/invoice/' + currentInvoiceId)
-              .then(function(r) { return r.json(); })
-              .then(function(fullData) {
-                const savedImg = localStorage.getItem('invoice_preview_' + currentInvoiceId);
-                if (savedImg) {
-                  previewImg.src = savedImg;
-                  currentPreviewDataUrl = savedImg;
+    try:
+        completion = client.beta.chat.completions.parse(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert invoice data extractor. "
+                        "Extract structured data from the invoice image accurately. "
+                        "Rules:\n"
+                        "1. Extract every product or service as a line item.\n"
+                        "2. If there is any tax (Sales Tax, VAT, GST, etc.), add it as an additional line item.\n"
+                        "2. If there is any tax (Sales Tax, VAT, GST, etc.), "
+                        "add it as an additional line item.\n"
+                        "3. Do not invent information.\n"
+                        "4. The sum of line items should match invoice_total as closely as possible."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract all data from this invoice. Include tax as a line item if present."},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{base64_image}"}}
+                    ]
                 }
-                populateTable(fullData, true);
-                showState3();
-              });
-          } else {
-            alert('Payment confirmation failed');
-          }
+            ],
+            response_format=InvoiceExtraction,
+            max_tokens=4096,
+        )
+        result = completion.choices[0].message.parsed
+        full_data = result.model_dump()
+
+        invoice_id = str(uuid.uuid4())
+
+        # 完整数据存入 Cloudflare KV（1小时）
+        # 完整数据存入 Cloudflare KV（1小时过期）
+        kv_put(f"invoice:{invoice_id}", {
+            "data": full_data,
+            "unlocked": False,
+            "created_at": datetime.utcnow().isoformat()
+        }, expiration_ttl=3600)
+
+        # 只返回前3行预览
+        # 只返回前3行给前端（脱水预览）
+        preview_data = full_data.copy()
+        preview_data["line_items"] = full_data["line_items"][:3]
+        preview_data["invoice_id"] = invoice_id
+        preview_data["is_preview"] = True
+        preview_data["total_lines"] = len(full_data["line_items"])
+        preview_data["unlocked"] = False
+
+        return jsonify(preview_data)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ===================== 获取发票数据（支付后拉取完整数据用） =====================
+@app.route("/api/invoice/<invoice_id>", methods=["GET"])
+def get_invoice(invoice_id):
+    record = kv_get(f"invoice:{invoice_id}")
+    if not record:
+        return jsonify({"error": "Invoice not found or expired"}), 404
+
+    data = record["data"]
+    unlocked = record.get("unlocked", False)
+
+    if not unlocked:
+        # 未解锁只返回前3行
+        preview = data.copy()
+        preview["line_items"] = data["line_items"][:3]
+        preview["invoice_id"] = invoice_id
+        preview["is_preview"] = True
+        preview["total_lines"] = len(data["line_items"])
+        preview["unlocked"] = False
+        return jsonify(preview)
+
+    # 已解锁返回完整数据
+    full = data.copy()
+    full["invoice_id"] = invoice_id
+    full["is_preview"] = False
+    full["total_lines"] = len(data["line_items"])
+    full["unlocked"] = True
+    return jsonify(full)
+
+# ===================== PayPal =====================
+def get_paypal_access_token():
+    url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
+    response = requests.post(
+        url,
+        headers={"Accept": "application/json", "Accept-Language": "en_US"},
+        data={"grant_type": "client_credentials"},
+        auth=HTTPBasicAuth(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+@app.route("/api/create-order", methods=["POST"])
+def create_order():
+    try:
+        data = request.get_json() or {}
+        invoice_id = data.get("invoice_id")
+        if not invoice_id:
+            return jsonify({"error": "invoice_id required"}), 400
+
+        access_token = get_paypal_access_token()
+        url = f"{PAYPAL_API_BASE}/v2/checkout/orders"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}"
+        }
+
+        return_url = "https://get-invoice-to-sheets.pages.dev"
+        cancel_url = "https://get-invoice-to-sheets.pages.dev"
+
+        payload = {
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "amount": {
+                    "currency_code": "USD",
+                    "value": "1.99"
+                },
+                "description": "GetInvoiceToSheets - Unlock full CSV",
+                "custom_id": invoice_id
+            }],
+            "application_context": {
+                "return_url": return_url,
+                "cancel_url": cancel_url,
+                "brand_name": "GetInvoiceToSheets",
+                "user_action": "PAY_NOW",
+                "shipping_preference": "NO_SHIPPING"
+            }
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        order = response.json()
+
+        approve_link = None
+        for link in order.get("links", []):
+            if link.get("rel") == "approve":
+                approve_link = link.get("href")
+                break
+
+        if not approve_link:
+            return jsonify({"error": "No approve link found"}), 500
+
+        return jsonify({
+            "id": order["id"],
+            "approve_url": approve_link
         })
-        .catch(function(err) {
-          console.error(err);
-          alert('Payment confirmation error');
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/capture-order/<order_id>", methods=["POST"])
+def capture_order(order_id):
+    try:
+        access_token = get_paypal_access_token()
+        url = f"{PAYPAL_API_BASE}/v2/checkout/orders/{order_id}/capture"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}"
+        }
+        response = requests.post(url, headers=headers)
+        response.raise_for_status()
+        result = response.json()
+
+        if result.get("status") != "COMPLETED":
+            return jsonify({"error": "Payment not completed"}), 400
+
+        # 取出 custom_id（invoice_id）
+        # 从 PayPal 返回结果取出 custom_id（invoice_id）
+        invoice_id = None
+        try:
+            invoice_id = result["purchase_units"][0]["payments"]["captures"][0].get("custom_id")
+        except Exception:
+            try:
+                invoice_id = result["purchase_units"][0].get("custom_id")
+            except Exception:
+                pass
+
+        if not invoice_id:
+            return jsonify({"error": "invoice_id not found"}), 400
+            return jsonify({"error": "invoice_id not found in payment"}), 400
+
+        # 标记已解锁
+        # 标记该发票已解锁
+        record = kv_get(f"invoice:{invoice_id}")
+        if record:
+            record["unlocked"] = True
+            kv_put(f"invoice:{invoice_id}", record, expiration_ttl=3600)
+
+        return jsonify({
+            "status": "COMPLETED",
+            "invoice_id": invoice_id
         })
-        .finally(function() {
-          loading.classList.add('hidden');
-        });
-    }
-  </script>
-</body>
-</html>
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ===================== 下载完整 CSV =====================
+@app.route("/api/download/<invoice_id>", methods=["GET"])
+def download_csv(invoice_id):
+    record = kv_get(f"invoice:{invoice_id}")
+    if not record:
+        return jsonify({"error": "Invoice not found or expired"}), 404
+
+    if not record.get("unlocked"):
+        return jsonify({"error": "Payment required"}), 403
+
+    data = record["data"]
+    date = data.get("invoice_date") or ""
+    supplier = data.get("vendor_name") or ""
+    invoice_total = data.get("invoice_total") or 0
+
+    csv_lines = ["Date,Supplier,Description,Unit Price,Quantity,Line Total,Invoice Total"]
+    line_items = data.get("line_items") or []
+
+    if not line_items:
+        csv_lines.append(f'"{date}","{supplier}",,,,,"{invoice_total}"')
+    else:
+        for idx, item in enumerate(line_items):
+            inv_col = f'"{invoice_total}"' if idx == 0 else ""
+            csv_lines.append(
+                f'"{date}","{supplier}","{item.get("description","")}","{item.get("unit_price",0)}","{item.get("quantity",0)}","{item.get("amount",0)}",{inv_col}'
+            )
+
+    csv_content = "\uFEFF" + "\n".join(csv_lines)
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=invoice_{invoice_id[:8]}.csv"}
+        headers={
+            "Content-Disposition": f"attachment; filename=invoice_{invoice_id[:8]}.csv"
+        }
+    )
+
+# ===================== 启动 =====================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
