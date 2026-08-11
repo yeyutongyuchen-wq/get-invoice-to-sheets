@@ -10,6 +10,13 @@
       border-color: #10b981 !important;
       background-color: #ecfdf5;
     }
+    @keyframes soft-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
+      50% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0); }
+    }
+    .pulse-btn {
+      animation: soft-pulse 2s infinite;
+    }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen text-gray-800">
@@ -26,7 +33,7 @@
 
   <main class="max-w-7xl mx-auto px-4 py-8">
 
-    <!-- 上传区 -->
+    <!-- 状态1：初始拖拽区 -->
     <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-white mb-8 transition-all cursor-pointer hover:border-emerald-400">
       <div class="text-5xl mb-4">📄</div>
       <p class="text-lg font-medium mb-2">Drag & drop invoice image here</p>
@@ -45,18 +52,20 @@
       </div>
     </div>
 
-    <!-- 主内容 -->
+    <!-- 状态2 & 3：主内容区 -->
     <div id="main-content" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6">
 
+      <!-- 左侧预览图 -->
       <div class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
         <h2 class="text-sm font-medium text-gray-500 mb-3">Invoice Preview</h2>
         <img id="preview-img" class="w-full rounded-lg border border-gray-100" alt="Invoice preview" />
       </div>
 
+      <!-- 右侧数据 -->
       <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">Data Review</h2>
-          <span id="preview-tip" class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full">
+          <span id="preview-tip" class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full hidden">
             Preview – only first 3 rows
           </span>
         </div>
@@ -76,6 +85,7 @@
           </div>
         </div>
 
+        <!-- 表格（前3行始终清晰可见） -->
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
@@ -90,28 +100,45 @@
           </table>
         </div>
 
-        <div id="more-rows-tip" class="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600 hidden">
-          <span id="hidden-count">0</span> more rows are hidden. Pay to unlock the complete data.
+        <!-- 锁定提示（放在表格下方，不遮挡前3行） -->
+        <div id="frosted-mask" class="hidden mt-3 p-4 bg-gray-50 border border-dashed border-gray-300 rounded-lg text-center">
+          <p class="text-sm font-medium text-gray-700 mb-1">More rows are locked</p>
+          <p class="text-xs text-gray-500">Pay $1.99 to unlock full data</p>
+        </div>
+
+        <div id="more-rows-tip" class="mt-3 text-sm text-gray-500 hidden">
+          <span id="hidden-count">0</span> more rows are hidden.
         </div>
 
         <div class="mt-6 pt-5 border-t border-gray-100">
+          <!-- 状态2：付费墙 -->
           <div id="payment-wall" class="bg-gray-50 rounded-xl p-5 border border-gray-200">
             <h3 class="font-semibold text-gray-800 mb-1">Unlock Full Download</h3>
             <p class="text-sm text-gray-600 mb-4">
               Pay <span class="font-bold text-emerald-600">$1.99</span> to download the complete CSV file.
               No registration required.
             </p>
-            <div id="paypal-button-container">
-              <button id="pay-btn" class="w-full py-3 bg-[#0070ba] hover:bg-[#005ea6] text-white font-medium rounded-lg transition">
-                Pay $1.99 with PayPal
-              </button>
-            </div>
+            <button id="pay-btn" class="w-full py-3 bg-[#0070ba] hover:bg-[#005ea6] text-white font-medium rounded-lg transition">
+              Pay $1.99 with PayPal
+            </button>
             <p class="text-xs text-gray-400 mt-3 text-center">Secure payment powered by PayPal</p>
           </div>
 
-          <button id="download-csv-btn" class="hidden w-full mt-4 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition">
-            Download Full CSV
-          </button>
+          <!-- 状态3：下载 + 继续上传 + 订阅引导 -->
+          <div id="unlocked-actions" class="hidden space-y-3">
+            <button id="download-csv-btn" class="w-full px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl shadow transition text-base">
+              Download Full CSV
+            </button>
+
+            <button id="upload-another-btn" class="w-full px-6 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl shadow transition pulse-btn text-base">
+              ⚡ Upload Another Invoice
+            </button>
+
+            <p class="text-center text-xs text-gray-500 pt-1 leading-relaxed">
+              Have multiple invoices?<br>
+              <span class="text-blue-600 font-medium">Save 50% with our $29/month Unlimited Plan</span>
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -120,6 +147,7 @@
   <script>
     const API_BASE = 'https://get-invoice-to-sheets-production.up.railway.app';
     let currentInvoiceId = null;
+    let currentPreviewDataUrl = null;
 
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
@@ -128,39 +156,72 @@
     const previewImg = document.getElementById('preview-img');
     const lineItemsBody = document.getElementById('line-items-body');
     const paymentWall = document.getElementById('payment-wall');
+    const unlockedActions = document.getElementById('unlocked-actions');
     const downloadBtn = document.getElementById('download-csv-btn');
+    const uploadAnotherBtn = document.getElementById('upload-another-btn');
     const statusBadge = document.getElementById('status-badge');
     const moreRowsTip = document.getElementById('more-rows-tip');
     const hiddenCount = document.getElementById('hidden-count');
     const previewTip = document.getElementById('preview-tip');
+    const frostedMask = document.getElementById('frosted-mask');
     const payBtn = document.getElementById('pay-btn');
+
+    function showState1() {
+      dropZone.classList.remove('hidden');
+      mainContent.classList.add('hidden');
+      paymentWall.classList.remove('hidden');
+      unlockedActions.classList.add('hidden');
+      frostedMask.classList.add('hidden');
+      previewTip.classList.add('hidden');
+      moreRowsTip.classList.add('hidden');
+      statusBadge.textContent = 'Free Preview Mode';
+      statusBadge.className = 'text-sm text-gray-500';
+      currentInvoiceId = null;
+      currentPreviewDataUrl = null;
+      fileInput.value = '';
+      lineItemsBody.innerHTML = '';
+    }
+
+    function showState2() {
+      dropZone.classList.add('hidden');
+      mainContent.classList.remove('hidden');
+      paymentWall.classList.remove('hidden');
+      unlockedActions.classList.add('hidden');
+      frostedMask.classList.remove('hidden');
+      previewTip.classList.remove('hidden');
+      statusBadge.textContent = 'Free Preview Mode';
+      statusBadge.className = 'text-sm text-gray-500';
+    }
+
+    function showState3() {
+      dropZone.classList.add('hidden');
+      mainContent.classList.remove('hidden');
+      paymentWall.classList.add('hidden');
+      unlockedActions.classList.remove('hidden');
+      frostedMask.classList.add('hidden');
+      previewTip.classList.add('hidden');
+      moreRowsTip.classList.add('hidden');
+      statusBadge.textContent = 'Unlocked – Download Ready';
+      statusBadge.className = 'text-sm text-emerald-600 font-medium';
+    }
 
     // 拖拽上传
     dropZone.addEventListener('dragover', function(e) {
       e.preventDefault();
       dropZone.classList.add('drag-active');
     });
-
     dropZone.addEventListener('dragleave', function() {
       dropZone.classList.remove('drag-active');
     });
-
     dropZone.addEventListener('drop', function(e) {
       e.preventDefault();
       dropZone.classList.remove('drag-active');
-      if (e.dataTransfer.files.length > 0) {
-        handleFile(e.dataTransfer.files[0]);
-      }
+      if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
     });
-
-    // 文件选择
     fileInput.addEventListener('change', function(e) {
-      if (e.target.files.length > 0) {
-        handleFile(e.target.files[0]);
-      }
+      if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
 
-    // 处理上传
     async function handleFile(file) {
       if (!file.type.match(/image\/(jpeg|png)/)) {
         alert('Please upload JPG or PNG image');
@@ -169,12 +230,12 @@
 
       const reader = new FileReader();
       reader.onload = function(e) {
-        previewImg.src = e.target.result;
+        currentPreviewDataUrl = e.target.result;
+        previewImg.src = currentPreviewDataUrl;
       };
       reader.readAsDataURL(file);
 
       loading.classList.remove('hidden');
-
       const formData = new FormData();
       formData.append('file', file);
 
@@ -184,23 +245,11 @@
           body: formData
         });
         const data = await res.json();
-
-        if (data.error) {
-          throw new Error(data.error);
-        }
+        if (data.error) throw new Error(data.error);
 
         currentInvoiceId = data.invoice_id;
-        populatePreview(data);
-
-        mainContent.classList.remove('hidden');
-        dropZone.classList.add('hidden');
-
-        // 重置为未支付状态
-        paymentWall.classList.remove('hidden');
-        downloadBtn.classList.add('hidden');
-        statusBadge.textContent = 'Free Preview Mode';
-        statusBadge.className = 'text-sm text-gray-500';
-
+        populateTable(data, false);
+        showState2();
       } catch (err) {
         alert('Recognition failed: ' + err.message);
       } finally {
@@ -208,17 +257,14 @@
       }
     }
 
-    // 填充预览数据（只显示前3行）
-    function populatePreview(data) {
+    function populateTable(data, isFull) {
       document.getElementById('invoice-date').value = data.invoice_date || '';
       document.getElementById('supplier').value = data.vendor_name || '';
       document.getElementById('invoice-total').value = data.invoice_total || '';
 
       lineItemsBody.innerHTML = '';
-
       const items = data.line_items || [];
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+      items.forEach(function(item) {
         const tr = document.createElement('tr');
         tr.className = 'border-b border-gray-50';
         tr.innerHTML =
@@ -227,27 +273,28 @@
           '<td class="py-2 pr-2">' + (item.quantity || '') + '</td>' +
           '<td class="py-2 pr-2">' + (item.amount || '') + '</td>';
         lineItemsBody.appendChild(tr);
-      }
+      });
 
-      const total = data.total_lines || 0;
-      const shown = items.length;
-      if (total > shown) {
-        hiddenCount.textContent = total - shown;
+      const total = data.total_lines || items.length;
+      if (!isFull && total > items.length) {
+        hiddenCount.textContent = total - items.length;
         moreRowsTip.classList.remove('hidden');
-        previewTip.classList.remove('hidden');
+        frostedMask.classList.remove('hidden');
       } else {
         moreRowsTip.classList.add('hidden');
-        previewTip.classList.add('hidden');
+        frostedMask.classList.add('hidden');
       }
     }
 
-    // 发起支付
-    async function startPayPalPayment() {
+    // 支付
+    payBtn.addEventListener('click', async function() {
       if (!currentInvoiceId) {
         alert('Please upload an invoice first');
         return;
       }
-
+      if (currentPreviewDataUrl) {
+        localStorage.setItem('invoice_preview_' + currentInvoiceId, currentPreviewDataUrl);
+      }
       try {
         const res = await fetch(API_BASE + '/api/create-order', {
           method: 'POST',
@@ -255,73 +302,63 @@
           body: JSON.stringify({ invoice_id: currentInvoiceId })
         });
         const data = await res.json();
-
         if (data.approve_url) {
           window.location.href = data.approve_url;
         } else {
-          alert('Failed to create payment order: ' + (data.error || 'Unknown error'));
+          alert('Failed to create payment order');
         }
       } catch (err) {
-        console.error(err);
         alert('Payment request failed');
       }
-    }
+    });
 
-    payBtn.addEventListener('click', startPayPalPayment);
-
-    // 下载完整 CSV
+    // 下载（静默下载，不跳转）
     downloadBtn.addEventListener('click', function() {
-      if (!currentInvoiceId) {
-        alert('No invoice to download');
-        return;
-      }
+      if (!currentInvoiceId) return;
       window.location.href = API_BASE + '/api/download/' + currentInvoiceId;
     });
 
-    // 解锁下载
-    function unlockDownload() {
-      paymentWall.classList.add('hidden');
-      downloadBtn.classList.remove('hidden');
-      statusBadge.textContent = 'Unlocked – Download Ready';
-      statusBadge.className = 'text-sm text-emerald-600 font-medium';
-      moreRowsTip.classList.add('hidden');
-      previewTip.classList.add('hidden');
-    }
+    // 继续上传
+    uploadAnotherBtn.addEventListener('click', function() {
+      showState1();
+    });
 
-    // 处理 PayPal 返回
+    // 支付返回处理
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
     const payerId = urlParams.get('PayerID');
 
     if (token && payerId) {
-      fetch(API_BASE + '/api/capture-order/' + token, {
-        method: 'POST'
-      })
-      .then(function(res) { return res.json(); })
-      .then(function(details) {
-        if (details.status === 'COMPLETED' && details.invoice_id) {
-          currentInvoiceId = details.invoice_id;
-          window.history.replaceState({}, document.title, window.location.pathname);
-          unlockDownload();
-          alert('Payment successful! You can now download the full CSV.');
-        } else {
-  currentInvoiceId = details.invoice_id;
-  window.history.replaceState({}, document.title, window.location.pathname);
-  
-  // 显示主内容区域
-  document.getElementById('main-content').classList.remove('hidden');
-  document.getElementById('drop-zone').classList.add('hidden');
-  
-  unlockDownload();
-  alert('Payment successful! You can now download the full CSV.');
-} else {
-          alert('Payment confirmation failed');
-        }
-      })
-      .catch(function(err) {
-        console.error(err);
-        alert('Payment confirmation error');
-      });
+      loading.classList.remove('hidden');
+      fetch(API_BASE + '/api/capture-order/' + token, { method: 'POST' })
+        .then(function(res) { return res.json(); })
+        .then(function(details) {
+          if (details.status === 'COMPLETED' && details.invoice_id) {
+            currentInvoiceId = details.invoice_id;
+            window.history.replaceState({}, document.title, window.location.pathname);
+
+            return fetch(API_BASE + '/api/invoice/' + currentInvoiceId)
+              .then(function(r) { return r.json(); })
+              .then(function(fullData) {
+                const savedImg = localStorage.getItem('invoice_preview_' + currentInvoiceId);
+                if (savedImg) {
+                  previewImg.src = savedImg;
+                  currentPreviewDataUrl = savedImg;
+                }
+                populateTable(fullData, true);
+                showState3();
+              });
+          } else {
+            alert('Payment confirmation failed');
+          }
+        })
+        .catch(function(err) {
+          console.error(err);
+          alert('Payment confirmation error');
+        })
+        .finally(function() {
+          loading.classList.add('hidden');
+        });
     }
   </script>
 </body>
